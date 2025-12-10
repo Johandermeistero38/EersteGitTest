@@ -33,7 +33,7 @@ async function convertFileToJpegWithResize(file) {
     return new Uint8Array(buffer);
   }
 
-  // Fallback: geen resize, alleen direct naar JPEG via blob (als die al JPEG is)
+  // Fallback: geen resize, direct bytes pakken
   const buffer = await file.arrayBuffer();
   return new Uint8Array(buffer);
 }
@@ -46,12 +46,14 @@ async function generateZipsInWorker({
   baseName,
   totalFiles
 }) {
-  const jpegCache = new Map(); // cache per bronbestand
-  let currentMap = {};
-  let currentCount = 0;
-  let currentBytes = 0;
-  let sliceIndex = 0;
-  let done = 0;
+  // Cache per bronbestand (via sourceId)
+  const jpegCache = new Map(); // key: sourceId (string) -> Uint8Array
+
+  let currentMap = {};     // { bestandsnaam: Uint8Array }
+  let currentCount = 0;    // aantal images in huidig deel
+  let currentBytes = 0;    // totale bytes in huidig deel
+  let sliceIndex = 0;      // part index
+  let done = 0;            // hoeveel bestanden al verwerkt
 
   async function flushSlice() {
     if (currentCount === 0) return;
@@ -63,20 +65,18 @@ async function generateZipsInWorker({
 
     // Naamgeving part1 / part2 etc.
     const name =
-      sliceIndex === 0 && steps.length === currentCount
+      sliceIndex === 0 && totalFiles === currentCount
         ? `${baseName}.zip`
         : `${baseName}_part${sliceIndex + 1}.zip`;
 
-    self.postMessage(
-      {
-        type: 'ZIP_SLICE_READY',
-        name,
-        numImages: currentCount,
-        sizeBytes,
-        blob
-      },
-      [blob] // blob transferen i.p.v. kopiëren
-    );
+    // LET OP: GEEN transferList gebruiken (Blob is niet transferable)
+    self.postMessage({
+      type: 'ZIP_SLICE_READY',
+      name,
+      numImages: currentCount,
+      sizeBytes,
+      blob
+    });
 
     sliceIndex++;
     currentMap = {};
@@ -85,18 +85,25 @@ async function generateZipsInWorker({
   }
 
   for (const step of steps) {
-    const { file, newName } = step;
+    const { file, newName, sourceId } = step;
 
-    let jpegData = jpegCache.get(file);
+    // Cache-key op basis van sourceId (komt uit script.js)
+    const cacheKey =
+      typeof sourceId === 'string' && sourceId
+        ? sourceId
+        : `${file.name}|${file.size}|${file.type}`;
+
+    let jpegData = jpegCache.get(cacheKey);
     if (!jpegData) {
       jpegData = await convertFileToJpegWithResize(file);
-      jpegCache.set(file, jpegData);
+      jpegCache.set(cacheKey, jpegData);
     }
 
     const fileSize = jpegData.length;
     const wouldCount = currentCount + 1;
     const wouldBytes = currentBytes + fileSize;
 
+    // Als we over de limiet gaan -> eerst huidige slice flushen
     if (
       currentCount > 0 &&
       (wouldCount > maxImagesPerZip || wouldBytes > maxBytesPerZip)
@@ -104,12 +111,14 @@ async function generateZipsInWorker({
       await flushSlice();
     }
 
+    // Toevoegen aan huidige slice
     currentMap[newName] = jpegData;
     currentCount++;
     currentBytes += fileSize;
 
+    // PROGRESS naar main thread
     done++;
-    if (done === totalFiles || done % 5 === 0) {
+    if (done === totalFiles || done % 10 === 0) {
       self.postMessage({
         type: 'PROGRESS',
         done,
@@ -118,8 +127,10 @@ async function generateZipsInWorker({
     }
   }
 
+  // Laatste slice wegschrijven
   await flushSlice();
 
+  // Klaar
   self.postMessage({
     type: 'DONE'
   });
@@ -128,7 +139,7 @@ async function generateZipsInWorker({
 // Ontvanger in de worker
 self.onmessage = async (event) => {
   const data = event.data;
-  if (data.type === 'GENERATE_ZIPS') {
+  if (data && data.type === 'GENERATE_ZIPS') {
     try {
       await generateZipsInWorker(data);
     } catch (err) {
