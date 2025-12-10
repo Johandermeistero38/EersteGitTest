@@ -1,3 +1,4 @@
+// === UI ELEMENTEN PAKKEN ===
 const colorsTableBody = document.getElementById('colors-table-body');
 const addColorBtn = document.getElementById('add-color-btn');
 const colorsError = document.getElementById('colors-error');
@@ -31,6 +32,7 @@ const zipDownloadSection = document.getElementById('zip-download-section');
 const zipTableBody = document.getElementById('zip-table-body');
 const downloadAllBtn = document.getElementById('download-all-btn');
 
+// === STATE ===
 let colorSets = [];
 let uploadedFiles = [];
 let pendingBatchFileIds = [];
@@ -38,11 +40,56 @@ let generatedZips = [];
 
 const colorNameRegex = /^[A-Za-z ]+$/;
 const MAX_IMAGES_PER_ZIP = 950;
-const MAX_BYTES_PER_ZIP = 950 * 1024 * 1024; // 950 MB geconverteerde JPEG-data
+const MAX_BYTES_PER_ZIP = 950 * 1024 * 1024; // 950 MB
 
 let isDirty = false;
 let isGenerating = false;
 let finalMessageEl = null;
+
+// === WEB WORKER ===
+let zipWorker = null;
+
+function initWorker() {
+  if (window.Worker) {
+    zipWorker = new Worker('worker.js');
+
+    zipWorker.onmessage = (e) => {
+      const data = e.data;
+      switch (data.type) {
+        case 'PROGRESS':
+          updateProgress(data.done, data.total);
+          break;
+        case 'ZIP_SLICE_READY': {
+          const { name, numImages, sizeBytes, blob } = data;
+          const url = URL.createObjectURL(blob);
+          generatedZips.push({ name, url, sizeBytes, numImages });
+          updateZipListUI();
+          break;
+        }
+        case 'DONE':
+          finishProgress();
+          isGenerating = false;
+          generateBtn.textContent = 'Genereer ZIP met hernoemde afbeeldingen';
+          markClean();
+          updateSummary();
+          updateGenerateButtonState();
+          break;
+        case 'ERROR':
+          filesError.innerHTML =
+            `<strong>ZIP fout (worker):</strong><br>${data.message || 'Onbekende fout'}`;
+          filesError.style.display = 'block';
+          isGenerating = false;
+          generateBtn.textContent = 'Genereer ZIP met hernoemde afbeeldingen';
+          updateGenerateButtonState();
+          break;
+      }
+    };
+  } else {
+    alert('Je browser ondersteunt geen Web Workers; prestatie kan minder zijn.');
+  }
+}
+
+// === HULPFUNCTIES ===
 
 function updateGenerateButtonState() {
   if (isGenerating) {
@@ -167,6 +214,8 @@ function finishProgress() {
   }, 1200);
 }
 
+// === KLEUREN-TABEL ===
+
 function addColorRow(initial = { name: '', asinsText: '' }) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
   colorSets.push({ id, name: initial.name, asinsText: initial.asinsText });
@@ -275,6 +324,8 @@ function renderColorTable() {
 }
 
 addColorBtn.addEventListener('click', () => addColorRow());
+
+// === BESTANDEN / IMAGES ===
 
 function autoSuffixForIndex(batchSize, index) {
   if (batchSize === 1) return 'MAIN';
@@ -436,6 +487,7 @@ function renderFileTable() {
   updateSummary();
 }
 
+// Dropzone events
 dropzone.addEventListener('click', () => fileInput.click());
 dropzone.addEventListener('dragover', (e) => {
   e.preventDefault();
@@ -463,6 +515,8 @@ fileInput.addEventListener('change', (e) => {
 zipNameInput.addEventListener('input', () => {
   markDirty();
 });
+
+// === KLEUR DIALOOG ===
 
 function openColorDialog(fileIds) {
   pendingBatchFileIds = fileIds.slice();
@@ -599,6 +653,8 @@ colorDialogConfirm.addEventListener('click', () => {
   updateSummary();
 });
 
+// === VALIDATIE & GENERATION PLAN ===
+
 function validateBeforeGenerate() {
   if (colorSets.length === 0) {
     colorsError.textContent = 'Voeg minimaal één kleur met ASIN\'s toe.';
@@ -719,6 +775,8 @@ function buildGenerationPlan() {
   return { plan, totalFiles: plan.length };
 }
 
+// === ZIP UI ===
+
 function formatBytes(bytes) {
   if (bytes == null || isNaN(bytes)) return '';
   const gb = bytes / (1024 * 1024 * 1024);
@@ -815,122 +873,9 @@ downloadAllBtn.addEventListener('click', () => {
   }
 });
 
-async function convertFileToJpeg(file) {
-  if (window.createImageBitmap) {
-    const bitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(bitmap, 0, 0);
+// === GENERATE BUTTON ===
 
-    const blob = await new Promise((resolve, reject) => {
-      canvas.toBlob(
-        b => b ? resolve(b) : reject(new Error('Kon JPEG blob niet maken')),
-        'image/jpeg',
-        0.85
-      );
-    });
-
-    const buffer = await blob.arrayBuffer();
-    return new Uint8Array(buffer);
-  }
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = async () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth || img.width;
-        canvas.height = img.naturalHeight || img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-
-        canvas.toBlob(async (blob) => {
-          if (!blob) {
-            reject(new Error('Kon JPEG blob niet maken'));
-            return;
-          }
-          const buffer = await blob.arrayBuffer();
-          resolve(new Uint8Array(buffer));
-        }, 'image/jpeg', 0.85);
-      };
-      img.onerror = () => reject(new Error('Kon afbeelding niet laden voor conversie.'));
-      img.src = reader.result;
-    };
-    reader.onerror = () => reject(new Error('Kon bestand niet lezen voor conversie.'));
-    reader.readAsDataURL(file);
-  });
-}
-
-// Bouw één ZIP uit een slice; gebruikt vooraf geconverteerde JPEG-data
-function buildZipWithFflate(filename, planSlice, baseProgressDone, totalFiles, zipMeta, jpegCache) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    const { Zip, AsyncZipDeflate } = fflate;
-
-    const zip = new Zip((err, data, final) => {
-      if (err) return reject(err);
-      if (data) chunks.push(data);
-      if (final) {
-        try {
-          const blob = new Blob(chunks, { type: 'application/zip' });
-          const sizeBytes = blob.size;
-          const url = URL.createObjectURL(blob);
-
-          generatedZips.push({
-            name: filename,
-            url,
-            sizeBytes,
-            numImages: zipMeta.numImages
-          });
-          updateZipListUI();
-
-          resolve();
-        } catch (e) {
-          reject(e);
-        }
-      }
-    });
-
-    (async () => {
-      try {
-        let processedInSlice = 0;
-
-        for (const step of planSlice) {
-          const { item, newName } = step;
-
-          let jpegData = jpegCache.get(item.id);
-          if (!jpegData) {
-            // fallback – zou eigenlijk niet mogen gebeuren
-            jpegData = await convertFileToJpeg(item.file);
-            jpegCache.set(item.id, jpegData);
-          }
-
-          // FIX: geef fflate een eigen kopie, zodat de originele buffer niet gedetached raakt
-          const jpegCopy = jpegData.slice();
-
-          const deflate = new AsyncZipDeflate(newName, { level: 6 });
-          zip.add(deflate);
-          deflate.push(jpegCopy, true);
-
-          processedInSlice++;
-          const globalDone = baseProgressDone + processedInSlice;
-          if (globalDone === totalFiles || globalDone % 10 === 0) {
-            updateProgress(globalDone, totalFiles);
-          }
-        }
-
-        zip.end();
-      } catch (err) {
-        reject(err);
-      }
-    })();
-  });
-}
-
-generateBtn.addEventListener('click', async () => {
+generateBtn.addEventListener('click', () => {
   if (isGenerating || !isDirty) return;
 
   resetErrors();
@@ -948,106 +893,41 @@ generateBtn.addEventListener('click', async () => {
     return;
   }
 
+  if (!zipWorker) {
+    filesError.textContent = 'Background worker is niet beschikbaar. Vernieuw de pagina en probeer opnieuw.';
+    filesError.style.display = 'block';
+    return;
+  }
+
   const { plan, totalFiles } = planData;
 
-  let generationSucceeded = false;
   isGenerating = true;
   updateGenerateButtonState();
 
   generateBtn.textContent = 'Bezig met genereren...';
   startProgress(totalFiles);
 
-  try {
-    // 1) Alle unieke bronbestanden één keer naar JPEG converteren
-    const jpegCache = new Map();
-    const seenIds = new Set();
-    const uniqueItems = [];
+  let baseName = zipNameInput.value.trim();
+  if (!baseName) baseName = 'amazon-images-per-afbeelding';
 
-    for (const step of plan) {
-      if (!seenIds.has(step.item.id)) {
-        seenIds.add(step.item.id);
-        uniqueItems.push(step.item);
-      }
-    }
+  // Alleen data naar worker sturen die nodig is
+  const stepsForWorker = plan.map(step => ({
+    newName: step.newName,
+    file: step.item.file
+  }));
 
-    for (const item of uniqueItems) {
-      const jpegData = await convertFileToJpeg(item.file);
-      jpegCache.set(item.id, jpegData);
-    }
-
-    // 2) Plan opdelen in slices o.b.v. daadwerkelijke JPEG-grootte
-    const zipSlices = [];
-    let currentSlice = [];
-    let currentCount = 0;
-    let currentBytes = 0;
-
-    for (const step of plan) {
-      const jpegData = jpegCache.get(step.item.id);
-      const fileSize = jpegData ? jpegData.length : 0;
-
-      const wouldCount = currentCount + 1;
-      const wouldBytes = currentBytes + fileSize;
-
-      if (
-        currentCount > 0 &&
-        (wouldCount > MAX_IMAGES_PER_ZIP || wouldBytes > MAX_BYTES_PER_ZIP)
-      ) {
-        zipSlices.push({
-          steps: currentSlice
-        });
-        currentSlice = [];
-        currentCount = 0;
-        currentBytes = 0;
-      }
-
-      currentSlice.push(step);
-      currentCount++;
-      currentBytes += fileSize;
-    }
-    if (currentSlice.length > 0) {
-      zipSlices.push({ steps: currentSlice });
-    }
-
-    const numZips = zipSlices.length;
-    let baseProgressDone = 0;
-    let baseName = zipNameInput.value.trim();
-    if (!baseName) baseName = 'amazon-images-per-afbeelding';
-
-    for (let i = 0; i < numZips; i++) {
-      const sliceInfo = zipSlices[i];
-      const slice = sliceInfo.steps;
-      const filename = numZips === 1
-        ? `${baseName}.zip`
-        : `${baseName}_part${i + 1}.zip`;
-
-      await buildZipWithFflate(filename, slice, baseProgressDone, totalFiles, {
-        numImages: slice.length
-      }, jpegCache);
-
-      baseProgressDone += slice.length;
-    }
-
-    finishProgress();
-    generationSucceeded = true;
-  } catch (err) {
-    filesError.innerHTML =
-      `<strong>ZIP fout:</strong><br>${err.message || err.toString()}<br><br>` +
-      `Bekijk de console (F12) voor volledige details (tab "Console").`;
-    filesError.style.display = 'block';
-  } finally {
-    isGenerating = false;
-    generateBtn.textContent = 'Genereer ZIP met hernoemde afbeeldingen';
-
-    if (generationSucceeded) {
-      markClean();
-    } else {
-      updateGenerateButtonState();
-    }
-
-    updateSummary();
-  }
+  zipWorker.postMessage({
+    type: 'GENERATE_ZIPS',
+    steps: stepsForWorker,
+    maxImagesPerZip: MAX_IMAGES_PER_ZIP,
+    maxBytesPerZip: MAX_BYTES_PER_ZIP,
+    baseName,
+    totalFiles
+  });
 });
 
+// === INIT ===
 renderColorTable();
 updateSummary();
 updateGenerateButtonState();
+initWorker();
