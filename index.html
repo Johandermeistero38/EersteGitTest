@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8">
+  <title>Amazon Image Renamer – varianten per kleur</title>
+
+  <!-- Koppeling naar externe CSS -->
+  <link rel="stylesheet" href="style.css">
+
+  <!-- fflate ZIP library -->
+  <script src="https://unpkg.com/fflate@0.8.0/umd/index.js"></script>
+</head>
+<body>
+  <div class="container">
+    <h1>Amazon country specific image tool</h1>
+
+    <div class="section">
+      <h2>1. Kleuren & ASIN's</h2>
+      <p style="font-size:14px;">
+        Voeg hier je varianten toe (bijv. <strong>Zwart</strong>, <strong>Blauw</strong>) en de ASIN's die bij die kleur horen.
+      </p>
+
+      <table class="colors-table" id="colors-table">
+        <thead>
+          <tr>
+            <th style="width:180px;">Kleur</th>
+            <th>ASIN's voor deze kleur</th>
+            <th style="width:90px;">Actie</th>
+          </tr>
+        </thead>
+        <tbody id="colors-table-body"></tbody>
+      </table>
+
+      <button type="button" class="btn-small btn-add" id="add-color-btn">
+        + Kleur toevoegen
+      </button>
+
+      <div class="helper-text">
+        Kleurnaam: alleen letters en spaties (bijv. <em>Donker Blauw</em>).<br>
+        ASIN's: scheiden met enter, komma, puntkomma of spaties.
+      </div>
+      <div class="error" id="colors-error" style="display:none;"></div>
+    </div>
+
+    <div class="section">
+      <h2>2. Upload basisafbeeldingen</h2>
+
+      <div id="dropzone" class="dropzone">
+        <p><strong>Sleep je afbeeldingen hierheen</strong></p>
+        <p>of klik om bestanden te kiezen</p>
+        <small>JPG/JPEG/PNG, meerdere tegelijk toegestaan – alles wordt bij het genereren automatisch naar JPG geconverteerd.</small>
+      </div>
+      <input type="file" id="file-input" multiple accept="image/*">
+
+      <table class="file-table" id="file-table" style="display:none;">
+        <thead>
+          <tr>
+            <th>Preview</th>
+            <th>Rol (suffix)</th>
+            <th>Kleur</th>
+            <th>Originele naam</th>
+            <th>Actie</th>
+          </tr>
+        </thead>
+        <tbody id="file-table-body"></tbody>
+      </table>
+
+      <div class="helper-text" id="file-counter" style="display:none;">
+        Selecteer voor elke afbeelding een rol en kleur.
+      </div>
+      <div class="error" id="files-error" style="display:none;"></div>
+    </div>
+
+    <div class="section">
+      <h2>3. ZIP bestandsnaam</h2>
+      <input
+        type="text"
+        id="zip-name"
+        placeholder="Bijv. kussens-zwart-varianten"
+        style="width:100%; padding:10px; border-radius:8px; border:1px solid #d1d5db; font-size:14px;"
+      >
+      <div class="helper-text">
+        Laat leeg voor de standaardnaam <strong>amazon-images-per-afbeelding.zip</strong>.
+      </div>
+    </div>
+
+    <div class="section" id="zip-download-section" style="display:none;">
+      <div class="zip-header-row">
+        <h2>4. Download gegenereerde ZIP-bestanden</h2>
+        <button class="btn-primary" id="download-all-btn" disabled>Download alles</button>
+      </div>
+
+      <div class="helper-text">
+        Hier verschijnen de ZIP-bestanden nadat je op "Genereer ZIP met hernoemde afbeeldingen" hebt geklikt.
+      </div>
+
+      <table class="zip-table" id="zip-table">
+        <thead>
+          <tr>
+            <th>Naam ZIP</th>
+            <th>Aantal afbeeldingen</th>
+            <th>Grootte (approx.)</th>
+            <th>Acties</th>
+          </tr>
+        </thead>
+        <tbody id="zip-table-body"></tbody>
+      </table>
+    </div>
+
+    <div class="footer">
+      <div>
+        <button class="btn-primary" id="generate-btn">
+          Genereer ZIP met hernoemde afbeeldingen
+        </button>
+
+        <div id="progress-container">
+          <div id="progress-text"></div>
+
+          <div id="progress-bar-wrapper">
+            <div id="progress-bar"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="counter" id="summary-info">
+        Nog geen kleuren of afbeeldingen toegevoegd.
+      </div>
+    </div>
+  </div>
+
+  <!-- ------- DIALOOG ------- -->
+
+  <div class="dialog-backdrop" id="color-dialog-backdrop">
+    <div class="dialog">
+      <h3>Kleur kiezen voor deze afbeeldingen</h3>
+      <p id="color-dialog-count-text" style="margin:4px 0 10px; font-size:13px;"></p>
+
+      <label style="font-size:13px; display:block; margin-bottom:4px;">
+        Kies bestaande kleur of voeg een nieuwe toe:
+      </label>
+
+      <select id="color-dialog-select"></select>
+
+      <div id="color-dialog-new-section" style="margin-top:10px; display:none;">
+        <label>Nieuwe kleurnaam</label>
+        <input type="text" id="color-dialog-new-name">
+
+        <div class="helper-text">Alleen letters en spaties toegestaan.</div>
+
+        <label style="margin-top:10px;">ASIN's voor deze nieuwe kleur</label>
+        <textarea id="color-dialog-new-asins"></textarea>
+      </div>
+
+      <div class="error" id="color-dialog-error" style="display:none;"></div>
+
+      <div class="dialog-footer">
+        <button class="btn-secondary" id="color-dialog-cancel">Annuleren</button>
+        <button class="btn-primary" id="color-dialog-confirm">Bevestigen</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EXTERNE JAVASCRIPT -->
+  <script src="script.js"></script>
+</body>
+</html>
