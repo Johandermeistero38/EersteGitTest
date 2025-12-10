@@ -59,6 +59,7 @@ function initWorker() {
         case 'PROGRESS':
           updateProgress(data.done, data.total);
           break;
+
         case 'ZIP_SLICE_READY': {
           const { name, numImages, sizeBytes, blob } = data;
           const url = URL.createObjectURL(blob);
@@ -66,6 +67,7 @@ function initWorker() {
           updateZipListUI();
           break;
         }
+
         case 'DONE':
           finishProgress();
           isGenerating = false;
@@ -74,6 +76,7 @@ function initWorker() {
           updateSummary();
           updateGenerateButtonState();
           break;
+
         case 'ERROR':
           filesError.innerHTML =
             `<strong>ZIP fout (worker):</strong><br>${data.message || 'Onbekende fout'}`;
@@ -214,7 +217,7 @@ function finishProgress() {
   }, 1200);
 }
 
-// === KLEUREN-TABEL ===
+// === KLEUREN ===
 
 function addColorRow(initial = { name: '', asinsText: '' }) {
   const id = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -299,9 +302,11 @@ function renderColorTable() {
       btnRemove.addEventListener('click', () => {
         const removedId = colorSets[index].id;
         colorSets.splice(index, 1);
+
         uploadedFiles = uploadedFiles.map(f =>
           f.colorId === removedId ? { ...f, colorId: '' } : f
         );
+
         markDirty();
         renderColorTable();
         renderFileTable();
@@ -325,7 +330,7 @@ function renderColorTable() {
 
 addColorBtn.addEventListener('click', () => addColorRow());
 
-// === BESTANDEN / IMAGES ===
+// === BESTANDEN ===
 
 function autoSuffixForIndex(batchSize, index) {
   if (batchSize === 1) return 'MAIN';
@@ -516,7 +521,7 @@ zipNameInput.addEventListener('input', () => {
   markDirty();
 });
 
-// === KLEUR DIALOOG ===
+// === KLEUR-DIALOOG ===
 
 function openColorDialog(fileIds) {
   pendingBatchFileIds = fileIds.slice();
@@ -734,7 +739,12 @@ function buildGenerationPlan() {
       if (!asinTrimmed) continue;
 
       const newName = `${asinTrimmed}.${suffix}.jpg`;
-      const step = { item, color, asin: asinTrimmed, newName };
+      const step = {
+        item,
+        color,
+        asin: asinTrimmed,
+        newName
+      };
 
       plan.push(step);
 
@@ -910,10 +920,11 @@ generateBtn.addEventListener('click', () => {
   let baseName = zipNameInput.value.trim();
   if (!baseName) baseName = 'amazon-images-per-afbeelding';
 
-  // Alleen data naar worker sturen die nodig is
+  // ✔ AANGEPAST: worker-cache gebruiken via sourceId
   const stepsForWorker = plan.map(step => ({
     newName: step.newName,
-    file: step.item.file
+    file: step.item.file,
+    sourceId: step.item.id     // <-- BELANGRIJK!
   }));
 
   zipWorker.postMessage({
